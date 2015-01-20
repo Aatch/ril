@@ -1,8 +1,8 @@
+use std::collections::HashMap;
 use std::fmt;
+
 use uniq_map::{Name, UniqueMap, Named};
-
 use dlist::DList;
-
 use ir::insts::Instruction;
 
 pub mod insts;
@@ -10,21 +10,46 @@ pub mod builder;
 pub mod ty;
 pub mod print;
 
-pub type InstName<'tcx> = Name<Instruction<'tcx>>;
-pub type BlockName<'tcx> = Name<BasicBlock<'tcx>>;
+pub type ModuleName<'tcx> = Name<Module<'tcx>>;
 pub type FunctionName<'tcx> = Name<Function<'tcx>>;
+pub type BlockName<'tcx> = Name<BasicBlock<'tcx>>;
+pub type InstName<'tcx> = Name<Instruction<'tcx>>;
+
+pub struct Context<'tcx> {
+    pub tcx: ty::Context<'tcx>,
+    pub fn_map: UniqueMap<Function<'tcx>>,
+    pub mod_map: UniqueMap<Module<'tcx>>,
+
+    pub mod_names: HashMap<ModuleName<'tcx>, String>,
+    pub fn_names: HashMap<FunctionName<'tcx>, String>
+}
 
 pub struct Module<'tcx> {
-    pub function_map: UniqueMap<Function<'tcx>>
+    pub name: ModuleName<'tcx>,
+    pub functions: Vec<FunctionName<'tcx>>
+}
+
+impl<'tcx> Named for Module<'tcx> {
+    fn set_name(&mut self, name: ModuleName<'tcx>) {
+        assert!(self.name.is_valid());
+        self.name = name;
+    }
 }
 
 pub struct Function<'tcx> {
     pub name: FunctionName<'tcx>,
-    pub arg_tys: Vec<ty::Ty<'tcx>>,
-    pub ret_ty: ty::Ty<'tcx>,
+    pub ty: ty::Ty<'tcx>,
     pub inst_map: UniqueMap<Instruction<'tcx>>,
     pub block_map: UniqueMap<BasicBlock<'tcx>>,
     pub blocks: DList<BlockName<'tcx>>,
+    pub inst_names: HashMap<InstName<'tcx>, String>
+}
+
+impl<'tcx> Named for Function<'tcx> {
+    fn set_name(&mut self, name: FunctionName<'tcx>) {
+        assert!(self.name.is_valid());
+        self.name = name;
+    }
 }
 
 pub struct BasicBlock<'tcx> {
@@ -61,15 +86,51 @@ pub struct Use<'tcx> {
     idx: usize,
 }
 
+impl<'tcx> Context<'tcx> {
+    pub fn new(tcx: ty::Context<'tcx>) -> Context<'tcx> {
+        Context {
+            tcx: tcx,
+            fn_map: UniqueMap::new(),
+            mod_map: UniqueMap::new(),
+            fn_names: HashMap::new(),
+            mod_names: HashMap::new(),
+        }
+    }
+
+    pub fn new_module(&mut self, name: String) -> ModuleName<'tcx> {
+        let module = Module {
+            name: Name::invalid(),
+            functions: Vec::new()
+        };
+
+        let mod_name = self.mod_map.unique(module);
+        self.mod_names.insert(mod_name, name);
+
+        mod_name
+    }
+
+    pub fn new_function(&mut self, module: ModuleName<'tcx>, name: String,
+                        inputs: Vec<ty::Ty<'tcx>>,
+                        output: ty::FnOutput<'tcx>) -> FunctionName<'tcx> {
+        let fty = self.tcx.mk_bare_fn(inputs, output, false);
+        let func = Function::new(fty);
+
+        let fname = self.fn_map.unique(func);
+        self.fn_names.insert(fname, name);
+
+        fname
+    }
+}
+
 impl<'tcx> Function<'tcx> {
-    pub fn new(arg_tys: Vec<ty::Ty<'tcx>>, ret_ty: ty::Ty<'tcx>) -> Function<'tcx> {
+    pub fn new(ty: ty::Ty<'tcx>) -> Function<'tcx> {
         Function {
             name: Name::invalid(),
-            arg_tys: arg_tys,
-            ret_ty: ret_ty,
+            ty: ty,
             inst_map: UniqueMap::new(),
             block_map: UniqueMap::new(),
             blocks: DList::new(),
+            inst_names: HashMap::new(),
         }
     }
 
@@ -273,17 +334,7 @@ impl<'tcx> Constant<'tcx> {
 
 impl<'tcx> fmt::Show for Function<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        try!(f.write_str("Function ("));
-        let mut comma = false;
-        for arg_ty in self.arg_tys.iter() {
-            if comma {
-                try!(f.write_str(", "));
-            }
-            comma = true;
-            try!(write!(f, "{:?}", arg_ty));
-        }
-        try!(write!(f, ") -> {:?} {{", &self.ret_ty));
-
+        try!(f.write_str("Function {{"));
         try!(write!(f, "  # Blocks: {}\n", self.blocks.len()));
         for &bn in self.blocks.iter() {
             let blk = self.block_map.get(bn).expect("Basic Block doesn't exist?!");

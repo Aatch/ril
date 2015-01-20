@@ -20,16 +20,7 @@ impl<'a, 'tcx> IRPrinter<'a, 'tcx> {
     }
 
     pub fn print(&mut self) {
-        print!("fn (");
-        let mut comma = false;
-        for &arg_ty in self.f.arg_tys.iter() {
-            if comma {
-                print!(", ");
-            }
-            comma = true;
-            self.print_type(arg_ty);
-        }
-        print!(") -> "); self.print_type(self.f.ret_ty);
+        self.print_type(self.f.ty);
         println!(" {{");
 
         for &bn in self.f.blocks.iter() {
@@ -186,6 +177,8 @@ impl<'a, 'tcx> IRPrinter<'a, 'tcx> {
             ty::Nil => print!("()"),
             ty::Bool => print!("bool"),
             ty::Char => print!("char"),
+            ty::Uint(0) => print!("us"),
+            ty::Int(0) => print!("is"),
             ty::Uint(sz) => print!("u{}", sz),
             ty::Int(sz) => print!("i{}", sz),
             ty::Float(sz) => print!("f{}", sz),
@@ -214,9 +207,38 @@ impl<'a, 'tcx> IRPrinter<'a, 'tcx> {
                 }
                 print!(")");
             }
+            ty::BareFn(ref ty) => {
+                match ty.abi {
+                    ty::Abi::Rust => (),
+                    ty::Abi::RustCall => print!("extern \"rust-call\" "),
+                    ty::Abi::RustIntrinsic => print!("extern \"rust-intrinsic\" "),
+                    ty::Abi::C => print!("extern \"C\" "),
+                }
+
+                self.print_fn_sig(&ty.sig);
+            }
             ty::Data(def) => {
                 print!("{}", &def.name[]);
             }
+        }
+    }
+
+    fn print_fn_sig(&self, sig: &ty::FnSig<'tcx>) {
+        print!("fn (");
+        let mut comma = false;
+        for &ty in sig.inputs.iter() {
+            if comma {
+                print!(", ");
+            }
+            comma = true;
+            self.print_type(ty);
+        }
+
+        print!(") -> ");
+        if sig.output.diverges() {
+            print!("!");
+        } else {
+            self.print_type(sig.output.unwrap());
         }
     }
 

@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher, Writer};
 pub use self::TyData::*;
 pub use self::DefData::*;
 pub use self::Mutability::*;
+pub use self::FnOutput::*;
 
 pub type Ty<'tcx> = &'tcx TyS<'tcx>;
 pub type Def<'tcx> = &'tcx DefS<'tcx>;
@@ -92,12 +93,8 @@ impl<'tcx> Context<'tcx> {
     }
 
     fn def_ty(&self, def: DefS<'tcx>) -> Def<'tcx> {
-        {
-            let interner = self.def_interner.borrow();
-            match interner.get(&def) {
-                Some(def) => return *def,
-                None => ()
-            }
+        if let Some(def) = self.def_interner.borrow().get(&def) {
+            return *def;
         }
 
         let def = self.arenas.def.alloc(def);
@@ -130,6 +127,13 @@ impl<'tcx> Context<'tcx> {
         } else {
             self.mk_t(Tup(tys))
         }
+    }
+
+    pub fn mk_bare_fn(&self, inputs: Vec<Ty<'tcx>>,
+                      output: FnOutput<'tcx>, variadic: bool) -> Ty<'tcx> {
+        let bfn = BareFnTy::new(inputs, output, variadic);
+
+        self.mk_t(BareFn(bfn))
     }
 
     pub fn mk_ptr(&self, mt: MTy<'tcx>) -> Ty<'tcx> {
@@ -167,9 +171,8 @@ impl<'tcx> Context<'tcx> {
 
 fn intern_ty<'tcx>(arena: &'tcx TypedArena<TyS<'tcx>>,
                    interner: &mut TyInterner<'tcx>, data: TyData<'tcx>) -> Ty<'tcx> {
-    match interner.get(&data) {
-        Some(ty) => return *ty,
-        None => ()
+    if let Some(ty) = interner.get(&data) {
+        return *ty;
     }
 
     let ty = arena.alloc(TyS {
@@ -230,6 +233,7 @@ pub enum TyData<'tcx> {
     Array(Ty<'tcx>, Option<usize>),
     Ptr(MTy<'tcx>),
     Tup(Vec<Ty<'tcx>>),
+    BareFn(BareFnTy<'tcx>),
     Data(Def<'tcx>),
 }
 
@@ -239,10 +243,66 @@ pub struct MTy<'tcx> {
     pub ty: Ty<'tcx>
 }
 
-#[derive(Clone, Show, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Show, PartialEq, Eq, Hash)]
 pub enum Mutability {
     Immutable,
     Mutable,
+}
+
+#[derive(Clone, Show, PartialEq, Eq, Hash)]
+pub struct BareFnTy<'tcx> {
+    pub abi: Abi,
+    pub sig: FnSig<'tcx>,
+}
+
+impl<'tcx> BareFnTy<'tcx> {
+    fn new(inputs: Vec<Ty<'tcx>>, output: FnOutput<'tcx>, variadic: bool) -> BareFnTy<'tcx> {
+        BareFnTy {
+            abi: Abi::Rust,
+            sig: FnSig {
+                inputs: inputs,
+                output: output,
+                variadic: variadic
+            }
+        }
+    }
+}
+
+#[derive(Clone, Show, PartialEq, Eq, Hash)]
+pub struct FnSig<'tcx> {
+    pub inputs: Vec<Ty<'tcx>>,
+    pub output: FnOutput<'tcx>,
+    pub variadic: bool,
+}
+
+#[derive(Clone, Show, PartialEq, Eq, Hash)]
+pub enum FnOutput<'tcx> {
+    FnConverging(Ty<'tcx>),
+    FnDiverging
+}
+
+impl<'tcx> FnOutput<'tcx> {
+    pub fn diverges(&self) -> bool {
+        match *self {
+            FnDiverging => true,
+            FnConverging(_) => false
+        }
+    }
+
+    pub fn unwrap(&self) -> Ty<'tcx> {
+        match *self {
+            FnConverging(ty) => ty,
+            FnDiverging => panic!("Can't unwrap a diverging type"),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Show, PartialEq, Eq, Hash)]
+pub enum Abi {
+    Rust,
+    RustCall,
+    RustIntrinsic,
+    C
 }
 
 #[derive(Clone, Show, PartialEq, Eq, Hash)]

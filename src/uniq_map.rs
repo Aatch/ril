@@ -10,15 +10,12 @@ impl<T> Clone for Name<T> {
         *self
     }
 }
-
 impl<T> PartialEq for Name<T> {
     fn eq(&self, other: &Name<T>) -> bool {
         self.0 == other.0
     }
 }
-
 impl<T> Eq for Name<T> { }
-
 impl<T, H: Hasher+Writer> Hash<H> for Name<T> {
     fn hash(&self, hasher: &mut H) {
         self.0.hash(hasher);

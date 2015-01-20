@@ -163,7 +163,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 }
             }
             ir::Value::Arg(idx) => {
-                self.f.arg_tys[idx]
+                if let ty::BareFn(ref fty) = self.f.ty.data {
+                    fty.sig.inputs[idx]
+                } else {
+                    panic!("Function isn't a function type?");
+                }
             }
         }
     }
