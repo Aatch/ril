@@ -6,9 +6,7 @@ use dlist::DList;
 use ir::insts::Instruction;
 
 pub mod insts;
-pub mod builder;
 pub mod ty;
-pub mod print;
 
 pub type ModuleName<'tcx> = Name<Module<'tcx>>;
 pub type FunctionName<'tcx> = Name<Function<'tcx>>;
@@ -66,6 +64,7 @@ impl<'tcx> Named for BasicBlock<'tcx> {
 
 #[derive(Copy,Clone,Show,PartialEq,Eq)]
 pub enum Value<'tcx> {
+    Function(FunctionName<'tcx>),
     Const(Constant<'tcx>),
     Inst(InstName<'tcx>),
     Arg(usize),
