@@ -26,6 +26,7 @@ pub struct BasicBlock {
     pub name: ImmString,
     instructions: IList<Instruction>,
     parent: *mut Function,
+    preds: Vec<*mut BasicBlock>,
 
     links: LinkPair<BasicBlock>
 }
@@ -327,6 +328,16 @@ impl Arg {
 impl Drop for Function {
     fn drop(&mut self) {
         self.uses.clear();
+        // We have to be careful about dropping block here, control flow insturctions update the
+        // predecessor set when they are dropped, so we need to make sure those blocks are still
+        // valid. We do this by clearing all the instructions from each block before dropping the
+        // list of blocks itself.
+        {
+            let mut cursor = self.blocks.cursor();
+            while let Some(blk) = cursor.next() {
+                blk.instructions.clear();
+            }
+        }
         self.blocks.clear();
         self.args.clear();
     }
@@ -338,6 +349,7 @@ impl BasicBlock {
             name: name.into_imm_string(),
             instructions: IList::new(),
             parent: ptr::null_mut(),
+            preds: Vec::new(),
 
             links: LinkPair::new()
         }
@@ -353,6 +365,7 @@ impl BasicBlock {
 
     pub fn push_instruction(&mut self, mut inst: Box<Instruction>) {
         inst.bb = self;
+        self.update_target_preds(&*inst);
         self.instructions.push_back(inst);
     }
 
@@ -364,9 +377,35 @@ impl BasicBlock {
             } else {
                 assert!((*before).bb == (self as *mut _));
                 inst.bb = self;
+                self.update_target_preds(&*inst);
                 self.instructions.insert_before(&mut *before, inst);
             }
         }
+    }
+
+    fn update_target_preds(&mut self, i: &Instruction) {
+        match i.op {
+            Op::Br(target) => unsafe {
+                (*target).add_pred(self);
+            },
+            Op::CondBr(_, then, els) => unsafe {
+                (*then).add_pred(self);
+                (*els).add_pred(self);
+            },
+            _ => ()
+        }
+    }
+
+    pub fn add_pred(&mut self, pred: *mut BasicBlock) {
+        for &p in self.preds.iter() {
+            if pred == p { return; }
+        }
+
+        self.preds.push(pred);
+    }
+
+    pub fn remove_pred(&mut self, pred: *mut BasicBlock) {
+        self.preds.retain(|&p| p != pred);
     }
 }
 
@@ -803,6 +842,18 @@ impl Drop for Instruction {
                 u.remove_use();
             }
         }
+
+        // Update the preds list of target blocks
+        match self.op {
+            Op::Br(target) => unsafe {
+                (*target).remove_pred(self.bb);
+            },
+            Op::CondBr(_, then, els) => unsafe {
+                (*then).remove_pred(self.bb);
+                (*els).remove_pred(self.bb);
+            },
+            _ => ()
+        }
     }
 }
 
@@ -1022,11 +1073,27 @@ impl fmt::Debug for Function {
             try!(f.write_str(" {\n"));
 
             for blk in self.blocks.iter() {
-                try!(write!(f, "{}:\n", blk.name));
+                try!(write!(f, "{}:", blk.name));
+
+                if blk.preds.len() > 0 {
+                    unsafe {
+                        let mut pred_iter = blk.preds.iter();
+                        if let Some(pred) = pred_iter.next() {
+                            try!(write!(f, " // preds: {}", (**pred).name));
+                        }
+                        while let Some(pred) = pred_iter.next() {
+                            try!(write!(f, ", {}", (**pred).name));
+                        }
+
+                    }
+                }
+
+                try!(f.write_str("\n"));
 
                 for i in blk.instructions.iter() {
                     try!(write!(f, "  {:?}\n", i))
                 }
+                try!(f.write_str("\n"))
             }
 
             f.write_str("}\n")

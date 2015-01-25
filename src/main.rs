@@ -28,38 +28,43 @@ fn main() {
     let cx = context::Context::new();
 
     let args = box [cx.types.u8, cx.types.bool];
-    let ret = cx.types.usize;
+    let ret = cx.types.u8;
 
     let s = ty::Ty::struct_(&*cx, "TestTy", box [cx.types.u8, cx.types.bool]);
 
     let builder = IRBuilder::new(cx);
 
-    let fn_builder = builder.start_function("test", args, ret);
-    fn_builder.set_arg_name(0, "a");
-    fn_builder.set_arg_name(1, "b");
+    let f = builder.start_function("test", args, ret);
+    f.set_arg_name(0, "a");
+    f.set_arg_name(1, "b");
 
     {
-        let cx = fn_builder.cx();
-        let entry = fn_builder.new_block("entry");
+        let cx = f.cx();
 
-        let a0 = fn_builder.arg(0);
-        let a1 = fn_builder.arg(1);
+        let entry = f.new_block("entry");
+        let then = f.new_block("then");
+        let els = f.new_block("els");
+        let join = f.new_block("join");
 
-        let zero = fn_builder.const_u8(0);
-        let one = fn_builder.const_u8(1);
+        let one = f.const_u8(1);
 
-        let add = fn_builder.add(entry, Some("add"), one.clone(), zero.clone());
+        let retval = f.alloca(entry, Some("retval"), cx.types.u8);
 
-        let eq = fn_builder.cmp(entry, Some("eq"), ir::Cmp::Eq, add, one.clone());
-        fn_builder.and(entry, Some("and"), eq, a1);
+        f.condbr(entry, f.arg(1), then, els);
 
-        let sub = fn_builder.sub(entry, Some("sub"), zero, a0.clone());
-        let ret = fn_builder.add(entry, Some("ret"), a0, sub);
+        let sub = f.sub(then, Some("sub"), f.arg(0), one.clone());
+        f.store(then, retval.clone(), sub);
+        f.br(then, join);
 
-        fn_builder.ret(entry, ret);
+        let add = f.add(els, Some("add"), f.arg(0), one);
+        f.store(els, retval.clone(), add);
+        f.br(els, join);
+
+        let ret = f.load(join, Some("ret"), retval);
+        f.ret(join, ret);
     }
 
-    let ccx = fn_builder.finish().unwrap();
+    let ccx = f.finish().unwrap();
 
     println!("{:?}", ccx);
 }
