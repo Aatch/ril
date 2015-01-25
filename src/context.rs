@@ -11,19 +11,19 @@ use ty;
 type ConstInterner = HashMap<ir::InternedConst, Box<ir::Constant>>;
 
 pub struct CommonTypes {
-    pub nil:   *const ty::Ty,
-    pub bool:  *const ty::Ty,
-    pub isize: *const ty::Ty,
-    pub i8:    *const ty::Ty,
-    pub i16:   *const ty::Ty,
-    pub i32:   *const ty::Ty,
-    pub i64:   *const ty::Ty,
-    pub usize: *const ty::Ty,
-    pub u8:    *const ty::Ty,
-    pub u16:   *const ty::Ty,
-    pub u32:   *const ty::Ty,
-    pub u64:   *const ty::Ty,
-    pub str:   *const ty::Ty,
+    pub nil:   ty::TyRef,
+    pub bool:  ty::TyRef,
+    pub isize: ty::TyRef,
+    pub i8:    ty::TyRef,
+    pub i16:   ty::TyRef,
+    pub i32:   ty::TyRef,
+    pub i64:   ty::TyRef,
+    pub usize: ty::TyRef,
+    pub u8:    ty::TyRef,
+    pub u16:   ty::TyRef,
+    pub u32:   ty::TyRef,
+    pub u64:   ty::TyRef,
+    pub str:   ty::TyRef,
 }
 
 impl CommonTypes {
@@ -68,20 +68,19 @@ impl Context {
         }
     }
 
-    pub fn intern_ty(&self, ty: ty::Ty) -> *const ty::Ty {
+    pub fn intern_ty(&self, ty: ty::Ty) -> ty::TyRef {
         let mut interner = self.ty_interner.borrow_mut();
-        let typ = intern_ty(&mut *interner, ty);
+        let ty = intern_ty(&mut *interner, ty);
 
-        let ty = unsafe { &*typ };
         if let Some(n) = ty.get_name() {
             let name = n.clone();
             let mut map = self.named_types.borrow_mut();
-            let old = map.insert(name, typ);
+            let old = map.insert(name, &*ty);
 
             assert!(old.is_none(), "Overwrote an existing type with the same name");
         }
 
-        typ
+        ty
     }
 
     pub fn insert_function(&self, mut f: Box<ir::Function>) {
@@ -124,9 +123,9 @@ impl Drop for Context {
     }
 }
 
-fn intern_ty(interner: &mut ty::TyInterner, ty: ty::Ty) -> *const ty::Ty {
+fn intern_ty(interner: &mut ty::TyInterner, ty: ty::Ty) -> ty::TyRef {
     match interner.get(&ty) {
-        Some(ty) => return &**ty,
+        Some(ty) => return ty::TyRef::new(&**ty),
         None => ()
     }
     let ty = box ty;
@@ -135,7 +134,7 @@ fn intern_ty(interner: &mut ty::TyInterner, ty: ty::Ty) -> *const ty::Ty {
 
     interner.insert(ty::InternedTy { ty: typ }, ty);
 
-    typ
+    ty::TyRef::new(typ)
 }
 
 impl fmt::Debug for Context {

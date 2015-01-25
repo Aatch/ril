@@ -4,12 +4,33 @@ use std::borrow::BorrowFrom;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Writer, Hasher};
+use std::ops;
 use std::ptr;
 
 use context::Context;
 use imm_str::{ImmString,IntoImmString};
 
 pub type TyInterner = HashMap<InternedTy, Box<Ty>>;
+
+#[derive(Hash,PartialEq,Eq,Clone,Copy)]
+pub struct TyRef {
+    p: *const Ty
+}
+
+impl TyRef {
+    pub fn new(p: *const Ty) -> TyRef {
+        TyRef {
+            p: p
+        }
+    }
+}
+
+impl ops::Deref for TyRef {
+    type Target = Ty;
+    fn deref<'a>(&'a self) -> &'a Ty {
+        unsafe { &*self.p }
+    }
+}
 
 #[derive(Hash,PartialEq,Eq)]
 pub enum Ty {
@@ -24,17 +45,17 @@ pub enum Ty {
     /// String type - str
     String,
     /// Raw Pointer - *T
-    Ptr(bool, *const Ty),
+    Ptr(bool, TyRef),
     /// Region Pointer - &T
-    RPtr(bool, Region, *const Ty),
+    RPtr(bool, Region, TyRef),
     /// Fixed-sized array type - [T; n]
-    Array(*const Ty, usize),
+    Array(TyRef, usize),
     /// Slice type - [T]
-    Slice(*const Ty),
+    Slice(TyRef),
     /// Tuple Type
-    Tuple(Box<[*const Ty]>),
+    Tuple(Box<[TyRef]>),
     /// Function Type
-    Fn(Box<[*const Ty]>, FnOutput),
+    Fn(Box<[TyRef]>, FnOutput),
     /// Struct Type
     Struct(StructTy),
 }
@@ -62,7 +83,7 @@ impl Ty {
         }
     }
 
-    pub fn pointee(&self) -> *const Ty {
+    pub fn pointee(&self) -> TyRef {
 
         match *self {
             Ty::Ptr(_, ptr) => ptr,
@@ -78,7 +99,7 @@ impl Ty {
         }
     }
 
-    pub fn int(cx: &Context, sz: usize) -> *const Ty {
+    pub fn int(cx: &Context, sz: usize) -> TyRef {
         match sz {
             0  => cx.types.isize,
             8  => cx.types.i8,
@@ -88,7 +109,7 @@ impl Ty {
             _ => cx.intern_ty(Ty::Int(sz)),
         }
     }
-    pub fn uint(cx: &Context, sz: usize) -> *const Ty {
+    pub fn uint(cx: &Context, sz: usize) -> TyRef {
         match sz {
             0  => cx.types.usize,
             8  => cx.types.u8,
@@ -99,71 +120,71 @@ impl Ty {
         }
     }
 
-    pub fn ptr(cx: &Context, mutbl: bool, ty: *const Ty) -> *const Ty {
+    pub fn ptr(cx: &Context, mutbl: bool, ty: TyRef) -> TyRef {
         cx.intern_ty(Ty::Ptr(mutbl, ty))
     }
 
-    pub fn rptr(cx: &Context, mutbl: bool, ty: *const Ty) -> *const Ty {
+    pub fn rptr(cx: &Context, mutbl: bool, ty: TyRef) -> TyRef {
         cx.intern_ty(Ty::RPtr(mutbl, Region::Anon, ty))
     }
 
-    pub fn array(cx: &Context, ty: *const Ty, sz: usize) -> *const Ty {
+    pub fn array(cx: &Context, ty: TyRef, sz: usize) -> TyRef {
         cx.intern_ty(Ty::Array(ty, sz))
     }
 
-    pub fn slice(cx: &Context, ty: *const Ty) -> *const Ty {
+    pub fn slice(cx: &Context, ty: TyRef) -> TyRef {
         cx.intern_ty(Ty::Slice(ty))
     }
 
-    pub fn tuple(cx: &Context, tys: Box<[*const Ty]>) -> *const Ty {
+    pub fn tuple(cx: &Context, tys: Box<[TyRef]>) -> TyRef {
         cx.intern_ty(Ty::Tuple(tys))
     }
 
-    pub fn fn_(cx: &Context, inputs: Box<[*const Ty]>, output: FnOutput) -> *const Ty {
+    pub fn fn_(cx: &Context, inputs: Box<[TyRef]>, output: FnOutput) -> TyRef {
         cx.intern_ty(Ty::Fn(inputs, output))
     }
 
-    pub fn nil(cx: &Context) -> *const Ty {
+    pub fn nil(cx: &Context) -> TyRef {
         cx.types.nil
     }
-    pub fn bool(cx: &Context) -> *const Ty {
+    pub fn bool(cx: &Context) -> TyRef {
         cx.types.bool
     }
-    pub fn isize(cx: &Context) -> *const Ty {
+    pub fn isize(cx: &Context) -> TyRef {
         cx.types.isize
     }
-    pub fn i8(cx: &Context) -> *const Ty {
+    pub fn i8(cx: &Context) -> TyRef {
         cx.types.i8
     }
-    pub fn i16(cx: &Context) -> *const Ty {
+    pub fn i16(cx: &Context) -> TyRef {
         cx.types.i16
     }
-    pub fn i32(cx: &Context) -> *const Ty {
+    pub fn i32(cx: &Context) -> TyRef {
         cx.types.i32
     }
-    pub fn i64(cx: &Context) -> *const Ty {
+    pub fn i64(cx: &Context) -> TyRef {
         cx.types.i64
     }
-    pub fn usize(cx: &Context) -> *const Ty {
+    pub fn usize(cx: &Context) -> TyRef {
         cx.types.usize
     }
-    pub fn u8(cx: &Context) -> *const Ty {
+    pub fn u8(cx: &Context) -> TyRef {
         cx.types.u8
     }
-    pub fn u16(cx: &Context) -> *const Ty {
+    pub fn u16(cx: &Context) -> TyRef {
         cx.types.u16
     }
-    pub fn u32(cx: &Context) -> *const Ty {
+    pub fn u32(cx: &Context) -> TyRef {
         cx.types.u32
     }
-    pub fn u64(cx: &Context) -> *const Ty {
+    pub fn u64(cx: &Context) -> TyRef {
         cx.types.u64
     }
-    pub fn str(cx: &Context) -> *const Ty {
+    pub fn str(cx: &Context) -> TyRef {
         cx.types.str
     }
 
-    pub fn struct_<S:IntoImmString>(cx: &Context, name: S, fields: Box<[*const Ty]>) -> *const Ty {
+    pub fn struct_<S:IntoImmString>(cx: &Context, name: S, fields: Box<[TyRef]>) -> TyRef {
         if fields.len() == 0 {
             cx.intern_ty(Ty::Struct(StructTy {
                 name: name.into_imm_string(),
@@ -171,21 +192,19 @@ impl Ty {
             }))
         } else if fields.len() == 1 {
             let fty = fields[0];
-            let fty = unsafe {
-                match *fty {
-                    Ty::Tuple(..) => Ty::tuple(cx, fields),
-                    _ => fty,
-                }
+            let fty = match *fty {
+                Ty::Tuple(..) => Ty::tuple(cx, fields),
+                _ => fty,
             };
 
             cx.intern_ty(Ty::Struct(StructTy {
                 name: name.into_imm_string(),
-                inner: fty,
+                inner: fty.p,
             }))
         } else {
             cx.intern_ty(Ty::Struct(StructTy {
                 name: name.into_imm_string(),
-                inner: Ty::tuple(cx, fields),
+                inner: Ty::tuple(cx, fields).p,
             }))
         }
     }
@@ -199,7 +218,7 @@ pub enum Region {
 #[derive(Clone,Hash,PartialEq,Eq)]
 pub enum FnOutput {
     Diverging,
-    Converging(*const Ty)
+    Converging(TyRef)
 }
 
 #[derive(Eq)]
@@ -234,13 +253,13 @@ impl StructTy {
     }
 
     #[inline]
-    pub fn get_field(&self, idx: u32) -> *const Ty {
+    pub fn get_field(&self, idx: u32) -> TyRef {
         assert!(idx < self.num_fields());
 
         let inner = unsafe { &*self.inner };
         match inner {
             &Ty::Tuple(ref tys) => tys[idx as usize],
-            ty => ty
+            ty => TyRef::new(ty)
         }
     }
 }
@@ -277,23 +296,23 @@ impl fmt::Debug for Ty {
             &Ty::Int(sz) => write!(f, "i{}", sz),
             &Ty::Uint(sz) => write!(f, "u{}", sz),
             &Ty::String => f.write_str("str"),
-            &Ty::Ptr(true, ty) => unsafe {
-                write!(f, "*mut {:?}", &*ty)
+            &Ty::Ptr(true, ty) => {
+                write!(f, "*mut {:?}", ty)
             },
-            &Ty::Ptr(false, ty) => unsafe {
-                write!(f, "*const {:?}", &*ty)
+            &Ty::Ptr(false, ty) => {
+                write!(f, "*const {:?}", ty)
             },
-            &Ty::RPtr(true, ref region, ty) => unsafe {
-                write!(f, "&{:?}mut {:?}", region, &*ty)
+            &Ty::RPtr(true, ref region, ty) => {
+                write!(f, "&{:?}mut {:?}", region, ty)
             },
-            &Ty::RPtr(false, ref region, ty) => unsafe {
-                write!(f, "&{:?}{:?}", region, &*ty)
+            &Ty::RPtr(false, ref region, ty) => {
+                write!(f, "&{:?}{:?}", region, ty)
             },
-            &Ty::Array(ty, sz) => unsafe {
-                write!(f, "[{:?}; {}]", &*ty, sz)
+            &Ty::Array(ty, sz) => {
+                write!(f, "[{:?}; {}]", ty, sz)
             },
-            &Ty::Slice(ty) => unsafe {
-                write!(f, "[{:?}]", &*ty)
+            &Ty::Slice(ty) => {
+                write!(f, "[{:?}]", ty)
             },
             &Ty::Tuple(ref tys) => {
                 try!(f.write_str("("));
@@ -307,15 +326,15 @@ impl fmt::Debug for Ty {
                 }
                 f.write_str(")")
             },
-            &Ty::Fn(ref ins, ref out) => unsafe {
+            &Ty::Fn(ref ins, ref out) => {
                 try!(f.write_str("fn("));
                 let mut ins = ins.iter();
                 if let Some(ty) = ins.next() {
-                    try!(fmt::Debug::fmt(&*ty, f));
+                    try!(fmt::Debug::fmt(ty, f));
                 }
                 while let Some(ty) = ins.next() {
                     try!(f.write_str(", "));
-                    try!(fmt::Debug::fmt(&*ty, f));
+                    try!(fmt::Debug::fmt(ty, f));
                 }
                 try!(f.write_str(") -> "));
                 if let &FnOutput::Converging(ty) = out {
@@ -331,13 +350,17 @@ impl fmt::Debug for Ty {
     }
 }
 
+impl fmt::Debug for TyRef {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
 impl fmt::Debug for FnOutput {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             &FnOutput::Diverging => f.write_str("!"),
-            &FnOutput::Converging(ty) => unsafe {
-                fmt::Debug::fmt(&*ty, f)
-            }
+            &FnOutput::Converging(ty) => fmt::Debug::fmt(&*ty, f)
         }
     }
 }
@@ -352,23 +375,21 @@ impl fmt::Debug for Region {
 
 impl fmt::Debug for StructTy {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        unsafe {
-            try!(write!(f, "struct %{}", self.name));
+        try!(write!(f, "struct %{}", self.name));
 
-            let num_fields = self.num_fields();
-            if num_fields == 0 {
-                return f.write_str(";");
-            } else if num_fields == 1 {
-                return write!(f, "({:?});", &*self.get_field(0));
-            }
-
-            try!(write!(f, " {{ {:?}", &*self.get_field(0)));
-
-            for i in (1..self.num_fields()) {
-                try!(write!(f, ", {:?}", &*self.get_field(i)));
-            }
-
-            f.write_str("}")
+        let num_fields = self.num_fields();
+        if num_fields == 0 {
+            return f.write_str(";");
+        } else if num_fields == 1 {
+            return write!(f, "({:?});", &*self.get_field(0));
         }
+
+        try!(write!(f, " {{ {:?}", &*self.get_field(0)));
+
+        for i in (1..self.num_fields()) {
+            try!(write!(f, ", {:?}", &*self.get_field(i)));
+        }
+
+        f.write_str("}")
     }
 }

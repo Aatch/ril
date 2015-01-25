@@ -14,7 +14,7 @@ use ty;
 pub struct Function {
     pub name: ImmString,
     blocks: IList<BasicBlock>,
-    ty: *const ty::Ty,
+    ty: ty::TyRef,
 
     pub cx: *const Context,
 
@@ -33,7 +33,7 @@ pub struct BasicBlock {
 pub struct Arg {
     pub name: Option<ImmString>,
     parent: *mut Function,
-    ty: *const ty::Ty,
+    ty: ty::TyRef,
     idx: u32,
 
     uses: IList<Use>,
@@ -44,7 +44,7 @@ pub struct Arg {
 pub struct Instruction {
     pub name: Option<ImmString>,
     pub op: Op,
-    ty: *const ty::Ty,
+    ty: ty::TyRef,
 
     bb: *mut BasicBlock,
     uses: IList<Use>,
@@ -80,7 +80,7 @@ pub struct Constant {
 
 #[derive(Hash,Eq,PartialEq)]
 pub enum ConstData {
-    Undef(*const ty::Ty),
+    Undef(ty::TyRef),
     Nil,
     Bool(bool),
     Int(i64, u16),
@@ -88,7 +88,35 @@ pub enum ConstData {
     String(ImmString)
 }
 
-type UseRef = *mut Use;
+struct UseRef {
+    p: *mut Use
+}
+
+impl UseRef {
+    fn new(u: *mut Use) -> UseRef {
+        UseRef { p: u }
+    }
+
+    pub fn clear(&mut self) {
+        self.p = ptr::null_mut();
+    }
+
+    pub fn get_use<'a>(&'a self) -> Option<&'a Use> {
+        if self.p.is_null() {
+            None
+        } else {
+            unsafe { Some(&*self.p) }
+        }
+    }
+
+    pub fn get_use_mut<'a>(&'a mut self) -> Option<&'a mut Use> {
+        if self.p.is_null() {
+            None
+        } else {
+            unsafe { Some(&mut *self.p) }
+        }
+    }
+}
 
 /// Specific Operations inside instructions
 pub enum Op {
@@ -119,7 +147,7 @@ pub enum Op {
     Call(UseRef, Box<[UseRef]>),
 
     /// Alloca(ty) - Allocate a new stack slot of given type `ty`.
-    Alloca(*const ty::Ty),
+    Alloca(ty::TyRef),
     /// Store(dst, val) - Store `val` into the location at `dst`
     /// The type pointed to by `dst` must be the same as the type of `val`
     Store(UseRef, UseRef),
@@ -151,7 +179,7 @@ pub enum Cmp {
 }
 
 impl Function {
-    pub fn new<S:IntoImmString>(name: S, ty: &ty::Ty) -> Box<Function> {
+    pub fn new<S:IntoImmString>(name: S, ty: ty::TyRef) -> Box<Function> {
         assert!(ty.is_fn_ty(), "`ty` is not a function type");
 
         let mut f = box Function {
@@ -212,12 +240,12 @@ impl Function {
         }
     }
 
-    pub fn get_type(&self) -> *const ty::Ty {
+    pub fn get_type(&self) -> ty::TyRef {
         self.ty
     }
 
     pub fn get_return_type(&self) -> ty::FnOutput {
-        if let &ty::Ty::Fn(_, ref out) = unsafe { &*self.ty } {
+        if let &ty::Ty::Fn(_, ref out) = &*self.ty {
             out.clone()
         } else {
             panic!("Function does not have a function type!")
@@ -239,7 +267,7 @@ impl Function {
         let up = &mut *u as *mut _;
         self.uses.push_back(u);
 
-        up
+        UseRef::new(up)
     }
 
     pub fn remove_use(&mut self, u: &mut Use) -> Box<Use> {
@@ -278,7 +306,7 @@ impl Arg {
         let up = &mut *u as *mut _;
         self.uses.push_back(u);
 
-        up
+        UseRef::new(up)
     }
 
     pub fn remove_use(&mut self, u: &mut Use) -> Box<Use> {
@@ -405,7 +433,7 @@ impl Drop for Use {
                     let operand = (*i).index_of(self);
                     warn!("Clearing operand {} for instruction \"{:?}\"",
                           operand, (*i).name);
-                    (*i).set_operand(operand, ptr::null_mut());
+                    (*i).clear_operand(operand);
                 }
                 _ => ()
             }
@@ -414,7 +442,7 @@ impl Drop for Use {
 }
 
 impl Value {
-    pub fn get_type(&self) -> *const ty::Ty {
+    pub fn get_type(&self) -> ty::TyRef {
         unsafe {
             match self.kind {
                 ValueKind::None => panic!("Tried to get type of None"),
@@ -514,15 +542,15 @@ impl Value {
 }
 
 impl Constant {
-    pub fn zero(cx: &Context, ty: *const ty::Ty) -> *mut Constant {
-        match unsafe { &*ty } {
+    pub fn zero(cx: &Context, ty: ty::TyRef) -> *mut Constant {
+        match &*ty {
             &ty::Ty::Int(sz) => Constant::int(cx, 0, sz as u16),
             &ty::Ty::Uint(sz) => Constant::uint(cx, 0, sz as u16),
             _ => panic!("Invalid type")
         }
     }
 
-    pub fn undef(cx: &Context, ty: *const ty::Ty) -> *mut Constant {
+    pub fn undef(cx: &Context, ty: ty::TyRef) -> *mut Constant {
         cx.intern_const(ConstData::Undef(ty))
     }
     pub fn nil(cx: &Context) -> *mut Constant {
@@ -583,7 +611,7 @@ impl Constant {
         let up = &mut *u as *mut _;
         self.uses.push_back(u);
 
-        up
+        UseRef::new(up)
     }
 
     pub fn remove_use(&mut self, u: &mut Use) -> Box<Use> {
@@ -597,7 +625,7 @@ impl Constant {
         }
     }
 
-    pub fn get_type(&self) -> *const ty::Ty {
+    pub fn get_type(&self) -> ty::TyRef {
         let cx = unsafe { &*self.cx };
 
         match self.data {
@@ -631,7 +659,7 @@ impl Constant {
 }
 
 impl Instruction {
-    pub fn new<S:IntoImmString>(name: Option<S>, ty: *const ty::Ty, op: Op) -> Box<Instruction> {
+    pub fn new<S:IntoImmString>(name: Option<S>, ty: ty::TyRef, op: Op) -> Box<Instruction> {
         let name = if let Some(name) = name {
             let name = name.into_imm_string();
             if name.len() == 0 { None } else { Some(name) }
@@ -657,7 +685,7 @@ impl Instruction {
         let up = &mut *u as *mut _;
         self.uses.push_back(u);
 
-        up
+        UseRef::new(up)
     }
 
     pub fn remove_use(&mut self, u: &mut Use) -> Box<Use> {
@@ -684,10 +712,16 @@ impl Instruction {
         *op = u;
     }
 
+    pub fn clear_operand(&mut self, idx: u32) {
+        let op = self.operands_mut().skip(idx as usize).next().expect("Invalid Use Index");
+        op.clear()
+    }
+
+
     pub fn index_of(&self, u: &Use) -> u32 {
         let up = u as *const _;
         self.operands().position(|u| {
-            (u as *const _) == up
+            (u.p as *const _) == up
         }).expect("Invalid Use") as u32
 
     }
@@ -725,7 +759,7 @@ impl Instruction {
         }
     }
 
-    pub fn get_type(&self) -> *const ty::Ty {
+    pub fn get_type(&self) -> ty::TyRef {
         self.ty
     }
 }
@@ -736,10 +770,8 @@ impl Drop for Instruction {
             self.uses.clear();
         }
         for u in self.operands_mut() {
-            unsafe {
-                if !u.is_null() {
-                    (**u).remove_use();
-                }
+            if let Some(u) = u.get_use_mut() {
+                u.remove_use();
             }
         }
     }
@@ -751,23 +783,23 @@ pub struct OperandIter<'a> {
 }
 
 impl<'a> Iterator for OperandIter<'a> {
-    type Item = UseRef;
+    type Item = &'a UseRef;
 
-    fn next(&mut self) -> Option<UseRef> {
+    fn next(&mut self) -> Option<&'a UseRef> {
         let idx = self.idx;
         self.idx += 1;
         match self.inst.op {
-            Op::Add(l, r) |
-            Op::Sub(l, r) |
-            Op::Mul(l, r) |
-            Op::Div(l, r) |
-            Op::Rem(l, r) |
-            Op::And(l, r) |
-            Op::Or(l, r) |
-            Op::Xor(l, r) |
-            Op::Cmp(_, l, r) |
-            Op::Index(l, r) |
-            Op::Store(l, r) => {
+            Op::Add(ref l, ref r) |
+            Op::Sub(ref l, ref r) |
+            Op::Mul(ref l, ref r) |
+            Op::Div(ref l, ref r) |
+            Op::Rem(ref l, ref r) |
+            Op::And(ref l, ref r) |
+            Op::Or(ref l, ref r) |
+            Op::Xor(ref l, ref r) |
+            Op::Cmp(_, ref l, ref r) |
+            Op::Index(ref l, ref r) |
+            Op::Store(ref l, ref r) => {
                 if idx == 0 {
                     Some(l)
                 } else if idx == 1 {
@@ -777,21 +809,21 @@ impl<'a> Iterator for OperandIter<'a> {
                 }
             }
 
-            Op::Call(f, ref args) => {
+            Op::Call(ref f, ref args) => {
                 if idx == 0 {
                     Some(f)
                 } else if idx <= args.len() as u32 {
-                    Some(args[(idx as usize)-1])
+                    Some(&args[(idx as usize)-1])
                 } else {
                     None
                 }
             }
 
-            Op::Load(u) |
-            Op::GetFieldPtr(u, _) |
-            Op::Not(u) |
-            Op::CondBr(u, _, _) |
-            Op::Return(u) => {
+            Op::Load(ref u) |
+            Op::GetFieldPtr(ref u, _) |
+            Op::Not(ref u) |
+            Op::CondBr(ref u, _, _) |
+            Op::Return(ref u) => {
                 if idx == 0 {
                     Some(u)
                 } else {
@@ -904,10 +936,6 @@ impl ToValue for Use {
     fn to_value(&self) -> Value { self.producer() }
 }
 
-impl ToValue for *mut Use {
-    fn to_value(&self) -> Value { unsafe { (**self).producer() } }
-}
-
 macro_rules! impl_ilist_node {
     ($ty:ty, $field:ident) => {
         unsafe impl IListNode for $ty {
@@ -949,14 +977,14 @@ impl fmt::Debug for Function {
                 try!(write!(f, "%{}: ", n));
             }
 
-            unsafe { try!(fmt::Debug::fmt(&*arg.ty, f)); }
+            try!(fmt::Debug::fmt(&*arg.ty, f));
         }
         while let Some(arg) = args.next() {
             try!(write!(f, ", "));
             if let Some(ref n) = arg.name {
                 try!(write!(f, "%{}: ", n));
             }
-            unsafe { try!(fmt::Debug::fmt(&*arg.ty, f)); }
+            try!(fmt::Debug::fmt(&*arg.ty, f));
         }
 
         try!(write!(f, ") -> {:?}", self.get_return_type()));
@@ -983,7 +1011,7 @@ impl fmt::Debug for Function {
 impl fmt::Debug for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fn print_binop(f: &mut fmt::Formatter, code: &str,
-                       name: &Option<ImmString>, l: &Value, r: &Value) -> fmt::Result {
+                       name: &Option<ImmString>, l: &UseRef, r: &UseRef) -> fmt::Result {
             let name = name.as_ref().map(|n| {
                 n.as_slice()
             }).unwrap_or("<unknown>");
@@ -991,38 +1019,38 @@ impl fmt::Debug for Instruction {
             write!(f, "%{} = {} {:?}, {:?}", name, code, l, r)
         }
         match self.op {
-            Op::Add(ref l, ref r) => unsafe {
-                print_binop(f, "add", &self.name, &(**l).producer, &(**r).producer)
+            Op::Add(ref l, ref r) => {
+                print_binop(f, "add", &self.name, l, r)
             },
-            Op::Sub(ref l, ref r) => unsafe {
-                print_binop(f, "sub", &self.name, &(**l).producer, &(**r).producer)
+            Op::Sub(ref l, ref r) => {
+                print_binop(f, "sub", &self.name, l, r)
             },
-            Op::Mul(ref l, ref r) => unsafe {
-                print_binop(f, "mul", &self.name, &(**l).producer, &(**r).producer)
+            Op::Mul(ref l, ref r) => {
+                print_binop(f, "mul", &self.name, l, r)
             },
-            Op::Div(ref l, ref r) => unsafe {
-                print_binop(f, "div", &self.name, &(**l).producer, &(**r).producer)
+            Op::Div(ref l, ref r) => {
+                print_binop(f, "div", &self.name, l, r)
             },
-            Op::Rem(ref l, ref r) => unsafe {
-                print_binop(f, "rem", &self.name, &(**l).producer, &(**r).producer)
+            Op::Rem(ref l, ref r) => {
+                print_binop(f, "rem", &self.name, l, r)
             },
-            Op::And(ref l, ref r) => unsafe {
-                print_binop(f, "and", &self.name, &(**l).producer, &(**r).producer)
+            Op::And(ref l, ref r) => {
+                print_binop(f, "and", &self.name, l, r)
             },
-            Op::Or(ref l, ref r) => unsafe {
-                print_binop(f, "or", &self.name, &(**l).producer, &(**r).producer)
+            Op::Or(ref l, ref r) => {
+                print_binop(f, "or", &self.name, l, r)
             },
-            Op::Xor(ref l, ref r) => unsafe {
-                print_binop(f, "xor", &self.name, &(**l).producer, &(**r).producer)
+            Op::Xor(ref l, ref r) => {
+                print_binop(f, "xor", &self.name, l, r)
             },
-            Op::Not(ref val) => unsafe {
+            Op::Not(ref val) => {
                 let name = self.name.as_ref().map(|n| {
                     n.as_slice()
                 }).unwrap_or("<unknown>");
 
-                write!(f, "%{} = not {:?}", name, (**val).producer)
+                write!(f, "%{} = not {:?}", name, val)
             },
-            Op::Cmp(ref cmp, ref l, ref r) => unsafe {
+            Op::Cmp(ref cmp, ref l, ref r) => {
                 let name = self.name.as_ref().map(|n| {
                     n.as_slice()
                 }).unwrap_or("<unknown>");
@@ -1036,11 +1064,11 @@ impl fmt::Debug for Instruction {
                     Cmp::Ge => "ge",
                 };
 
-                write!(f, "%{} = cmp {}, {:?}, {:?}", name, cmp, (**l).producer, (**r).producer)
+                write!(f, "%{} = cmp {}, {:?}, {:?}", name, cmp, l, r)
             },
 
-            Op::Call(ref fun, ref args) => unsafe {
-                let fun = &(**fun).producer;
+            Op::Call(ref fun, ref args) => {
+                let fun = fun.get_use().unwrap().producer();
 
                 let retty = if let &ty::Ty::Fn(_, ref out) = &*fun.get_type() {
                     out.clone()
@@ -1061,48 +1089,47 @@ impl fmt::Debug for Instruction {
                 try!(write!(f, "call {:?}(", fun));
                 let mut args = args.iter();
                 if let Some(arg) = args.next() {
-                    try!(write!(f, "{:?}", (**arg).producer));
+                    try!(write!(f, "{:?}", arg));
                 }
 
                 while let Some(arg) = args.next() {
-                    try!(write!(f, ", {:?}", (**arg).producer));
+                    try!(write!(f, ", {:?}", arg));
                 }
 
                 f.write_str(")")
             },
 
-            Op::Alloca(ty) => unsafe {
+            Op::Alloca(ty) => {
                 let name = self.name.as_ref().map(|n| {
                     n.as_slice()
                 }).unwrap_or("<unknown>");
 
-                write!(f, "%{} = alloca {:?}", name, &*ty)
+                write!(f, "%{} = alloca {:?}", name, ty)
             },
-            Op::Store(ref dst, ref val) => unsafe {
-                write!(f, "store {:?}, {:?}", (**dst).producer, (**val).producer)
+            Op::Store(ref dst, ref val) => {
+                write!(f, "store {:?}, {:?}", dst, val)
             },
-            Op::Load(ref src) => unsafe {
+            Op::Load(ref src) => {
                 let name = self.name.as_ref().map(|n| {
                     n.as_slice()
                 }).unwrap_or("<unknown>");
 
-                write!(f, "%{} = load {:?}", name, (**src).producer)
+                write!(f, "%{} = load {:?}", name, src)
             },
-            Op::GetFieldPtr(ref val, fld) => unsafe {
+            Op::GetFieldPtr(ref val, fld) => {
                 let name = self.name.as_ref().map(|n| {
                     n.as_slice()
                 }).unwrap_or("<unknown>");
 
                 write!(f, "%{} = getfieldptr {:?}, {}",
-                       name, (**val).producer, fld)
+                       name, val, fld)
             },
-            Op::Index(ref val, ref idx) => unsafe {
+            Op::Index(ref val, ref idx) => {
                 let name = self.name.as_ref().map(|n| {
                     n.as_slice()
                 }).unwrap_or("<unknown>");
 
-                write!(f, "%{} = index {:?}, {:?}", name,
-                       (**val).producer, (**idx).producer)
+                write!(f, "%{} = index {:?}, {:?}", name, val, idx)
             },
 
             Op::Br(ref blk) => unsafe {
@@ -1111,14 +1138,13 @@ impl fmt::Debug for Instruction {
                 write!(f, "br {}", blk.name)
             },
             Op::CondBr(ref u, ref then, ref els) => unsafe {
-                let u = &**u;
                 let then = &**then;
                 let els = &**els;
 
-                write!(f, "condbr {:?}, {}, {}", u.producer, then.name, els.name)
+                write!(f, "condbr {:?}, {}, {}", u, then.name, els.name)
             },
-            Op::Return(ref u) => unsafe {
-                write!(f, "ret {:?}", (**u).producer)
+            Op::Return(ref u) => {
+                write!(f, "ret {:?}", u)
             },
         }
     }
@@ -1164,6 +1190,16 @@ impl fmt::Debug for Constant {
             ConstData::Int(val, sz) => write!(f, "{}i{}", val, sz),
             ConstData::Uint(val, sz) => write!(f, "{}u{}", val, sz),
             ConstData::String(ref s) => write!(f, "{:?}", s),
+        }
+    }
+}
+
+impl fmt::Debug for UseRef {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Some(u) = self.get_use() {
+            fmt::Debug::fmt(&u.producer(), f)
+        } else {
+            f.write_str("<no-def>")
         }
     }
 }

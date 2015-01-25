@@ -29,7 +29,7 @@ impl<T> IRBuilder<T> {
     }
 
     pub fn decl_function<'a, S>(&'a self, name: S,
-                            args: Box<[*const ty::Ty]>, ret: *const ty::Ty) -> ValueHandle<'a>
+                            args: Box<[ty::TyRef]>, ret: ty::TyRef) -> ValueHandle<'a>
     where S : IntoImmString, str: BorrowFrom<S> {
         let fty = ty::Ty::fn_(&*self.cx, args, ty::FnOutput::Converging(ret));
 
@@ -41,22 +41,18 @@ impl<T> IRBuilder<T> {
         }
     }
 
-    fn decl_fn_inner<S>(&self, name: S, ty: *const ty::Ty) -> *mut ir::Function
+    fn decl_fn_inner<S>(&self, name: S, ty: ty::TyRef) -> *mut ir::Function
     where S : IntoImmString, str: BorrowFrom<S> {
         {
             let name_s : &str = BorrowFrom::borrow_from(&name);
             if let Some(f) = self.cx.get_function(name_s) {
-                unsafe {
-                    let exist_fty = (*f).get_type();
-                    assert!(exist_fty == ty, "Function exists with same name, but different type");
-                    return f;
-                }
+                let exist_fty = unsafe { (*f).get_type() };
+                assert!(exist_fty == ty, "Function exists with same name, but different type");
+                return f;
             }
         }
 
-        let mut f = unsafe {
-            ir::Function::new(name, &*ty)
-        };
+        let mut f = ir::Function::new(name, ty);
         let fp = &mut *f as *mut _;
 
         self.cx.insert_function(f);
@@ -121,8 +117,8 @@ impl IRBuilder<()> {
     }
 
     pub fn start_function<S>(self, name: S,
-                          args: Box<[*const ty::Ty]>,
-                          ret: *const ty::Ty) -> IRBuilder<Function>
+                          args: Box<[ty::TyRef]>,
+                          ret: ty::TyRef) -> IRBuilder<Function>
     where S : IntoImmString, str: BorrowFrom<S> {
         let fty = ty::Ty::fn_(&*self.cx, args, ty::FnOutput::Converging(ret));
         let f = self.decl_fn_inner(name, fty);
@@ -268,7 +264,7 @@ impl IRBuilder<Function> {
 
         let mut f = f.val;
 
-        let retty = match unsafe { &*f.get_type() } {
+        let retty = match &*f.get_type() {
             &ty::Ty::Fn(_, ref out) => match out {
                 &ty::FnOutput::Diverging => self.cx.types.nil,
                 &ty::FnOutput::Converging(ty) => ty
@@ -288,7 +284,7 @@ impl IRBuilder<Function> {
     }
 
     pub fn alloca<'a, S>(&'a self, blk: BlockHandle<'a>, name: Option<S>,
-                        ty: *const ty::Ty) -> ValueHandle<'a>
+                        ty: ty::TyRef) -> ValueHandle<'a>
     where S: IntoImmString {
         let op = ir::Op::Alloca(ty);
         let ity = ty::Ty::rptr(&*self.cx, true, ty);
@@ -300,14 +296,12 @@ impl IRBuilder<Function> {
         let mut dst = dst.val;
         let mut val = val.val;
 
-        let dst_ty = unsafe { &*dst.get_type() };
+        let dst_ty = &*dst.get_type();
         let val_ty = val.get_type();
 
-        unsafe {
-            assert!(dst_ty.is_pointer(), "Destination ({:?}) is not a pointer", dst_ty);
-            assert!(dst_ty.pointee() == val_ty, "Type Mismatch: {:?} != {:?}",
-                    &*dst_ty.pointee(), &*val_ty);
-        }
+        assert!(dst_ty.is_pointer(), "Destination ({:?}) is not a pointer", dst_ty);
+        assert!(dst_ty.pointee() == val_ty, "Type Mismatch: {:?} != {:?}",
+                dst_ty.pointee(), val_ty);
         let op = ir::Op::Store(dst.add_use(), val.add_use());
 
         self.add_instruction(blk, None::<&'static str>, op, val_ty);
@@ -317,7 +311,7 @@ impl IRBuilder<Function> {
                        src: ValueHandle<'a>) -> ValueHandle<'a>
     where S: IntoImmString {
         let mut src = src.val;
-        let src_ty = unsafe { &*src.get_type() };
+        let src_ty = src.get_type();
 
         assert!(src_ty.is_pointer(), "Source is not a pointer");
 
@@ -331,13 +325,13 @@ impl IRBuilder<Function> {
                               val: ValueHandle<'a>, fld: u32) -> ValueHandle<'a>
     where S: IntoImmString {
         let mut val = val.val;
-        let val_ty = unsafe { &*val.get_type() };
+        let val_ty = val.get_type();
 
         assert!(val_ty.is_pointer(), "Value is not a pointer ({:?} != pointer type)",
                 val_ty);
-        let pointee = unsafe { &*val_ty.pointee() };
+        let pointee = val_ty.pointee();
 
-        let ty = match pointee {
+        let ty = match &*pointee {
             &ty::Ty::Struct(ref sty) => {
                 if sty.num_fields() > fld {
                     sty.get_field(fld)
@@ -367,20 +361,19 @@ impl IRBuilder<Function> {
         let mut val = val.val;
         let mut idx = idx.val;
 
-        let idx_ty = unsafe { &*idx.get_type() };
-        let val_ty = unsafe { &*val.get_type() };
+        let idx_ty = idx.get_type();
+        let val_ty = val.get_type();
 
         assert!(idx_ty.is_uint(), "Index is not a valid type ({:?} != unsigned integer)",
                 idx_ty);
         assert!(val_ty.is_pointer(), "Value is not a pointer ({:?} != pointer type)",
                 val_ty);
-        let seq_ty = unsafe { &*val_ty.pointee() };
+        let seq_ty = val_ty.pointee();
 
-        let el_ty = match seq_ty {
+        let el_ty = match &*seq_ty {
             &ty::Ty::Array(ty, _) |
             &ty::Ty::Slice(ty) => ty,
-            ty => panic!("Value is not a pointer to a valid type ({:?})",
-                         unsafe { &*ty })
+            ty => panic!("Value is not a pointer to a valid type ({:?})", ty)
         };
 
         let ty = ty::Ty::rptr(&*self.cx, mutbl, el_ty);
@@ -430,7 +423,7 @@ impl IRBuilder<Function> {
     }
 
     fn add_instruction<'a, S>(&'a self, blk: BlockHandle<'a>, name: Option<S>,
-                              op: ir::Op, ty: *const ty::Ty) -> ValueHandle<'a>
+                              op: ir::Op, ty: ty::TyRef) -> ValueHandle<'a>
     where S:IntoImmString {
         let blk = unsafe { &mut *blk.blk };
         let name = self.inst_name(name);
@@ -439,8 +432,8 @@ impl IRBuilder<Function> {
         let val = ir::Value::inst(&mut *inst);
 
         for u in inst.operands_mut() {
-            unsafe {
-                (**u).set_consumer(val.clone());
+            if let Some(u) = u.get_use_mut() {
+                u.set_consumer(val.clone());
             }
         }
 

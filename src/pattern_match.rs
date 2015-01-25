@@ -234,7 +234,7 @@ pub struct UintPattern<P:Pattern> {
 impl<P:Pattern> Pattern for UintPattern<P> {
     #[inline(always)]
     fn do_match(self, v: &ir::Value) -> bool {
-        match unsafe { &*v.get_type() } {
+        match &*v.get_type() {
             &ty::Ty::Uint(..) => self.p.do_match(v),
             _ => false
         }
@@ -247,7 +247,7 @@ pub struct IntPattern<P:Pattern> {
 impl<P:Pattern> Pattern for IntPattern<P> {
     #[inline(always)]
     fn do_match(self, v: &ir::Value) -> bool {
-        match unsafe { &*v.get_type() } {
+        match &*v.get_type() {
             &ty::Ty::Int(..) => self.p.do_match(v),
             _ => false
         }
@@ -260,7 +260,7 @@ pub struct BoolPattern<P:Pattern> {
 impl<P:Pattern> Pattern for BoolPattern<P> {
     #[inline(always)]
     fn do_match(self, v: &ir::Value) -> bool {
-        match unsafe { &*v.get_type() } {
+        match &*v.get_type() {
             &ty::Ty::Bool(..) => self.p.do_match(v),
             _ => false
         }
@@ -306,21 +306,19 @@ macro_rules! binop_pattern {
             #[inline(always)]
             fn do_match(self, v: &ir::Value) -> bool {
                 if let Some(inst) = v.as_inst() {
-                    if let ir::Op::$op(lhs, rhs) = inst.op {
-                        unsafe {
-                            let lhs = (*lhs).producer();
-                            let rhs = (*rhs).producer();
+                    if let ir::Op::$op(ref lhs, ref rhs) = inst.op {
+                        let $op { p1, p2 } = self;
 
-                            let $op { p1, p2 } = self;
-
-                            p1.do_match(&lhs) && p2.do_match(&rhs)
+                        if let Some(lhs) = lhs.get_use() {
+                            if p1.do_match(&lhs.producer()) {
+                                if let Some(rhs) = rhs.get_use() {
+                                    return p2.do_match(&rhs.producer());
+                                }
+                            }
                         }
-                    } else {
-                        false
                     }
-                } else {
-                    false
                 }
+                false
             }
         }
 
