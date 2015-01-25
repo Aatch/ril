@@ -389,6 +389,13 @@ impl<'a, T> Cursor<'a, T> where T: IListNode {
         }
     }
 
+    pub unsafe fn position_at(&mut self, n: *mut T) {
+        match (*n).prev_mut() {
+            None => self.prev = None,
+            Some(prev) => self.prev = mk_rawlink(prev)
+        }
+    }
+
     pub fn seek_forward(&mut self, by: usize) {
         for _ in (0..by) { self.next(); }
     }

@@ -74,7 +74,7 @@ enum ValueKind {
 
 pub struct Constant {
     cx: *const Context,
-    data: ConstData,
+    pub data: ConstData,
     uses: IList<Use>,
 }
 
@@ -169,6 +169,7 @@ pub enum Op {
     Return(UseRef),
 }
 
+#[derive(Copy)]
 pub enum Cmp {
     Eq,
     Ne,
@@ -544,8 +545,18 @@ impl Value {
 impl Constant {
     pub fn zero(cx: &Context, ty: ty::TyRef) -> *mut Constant {
         match &*ty {
+            &ty::Ty::Bool => Constant::bool(cx, false),
             &ty::Ty::Int(sz) => Constant::int(cx, 0, sz as u16),
             &ty::Ty::Uint(sz) => Constant::uint(cx, 0, sz as u16),
+            _ => panic!("Invalid type")
+        }
+    }
+
+    pub fn all_ones(cx: &Context, ty: ty::TyRef) -> *mut Constant {
+        match &*ty {
+            &ty::Ty::Bool => Constant::bool(cx, true),
+            &ty::Ty::Int(sz) => Constant::int(cx, -1, sz as u16),
+            &ty::Ty::Uint(sz) => Constant::uint(cx, !0, sz as u16),
             _ => panic!("Invalid type")
         }
     }
@@ -575,6 +586,8 @@ impl Constant {
         Constant::int(cx, val, 64)
     }
     pub fn int(cx: &Context, val: i64, sz: u16) -> *mut Constant {
+        // Is this right wrt to negative numbers
+        let val = val % (2 << sz);
         cx.intern_const(ConstData::Int(val, sz))
     }
     pub fn usize(cx: &Context, val: usize) -> *mut Constant {
@@ -593,6 +606,7 @@ impl Constant {
         Constant::uint(cx, val, 64)
     }
     pub fn uint(cx: &Context, val: u64, sz: u16) -> *mut Constant {
+        let val = val % (2 << sz);
         cx.intern_const(ConstData::Uint(val, sz))
     }
 
@@ -638,6 +652,13 @@ impl Constant {
         }
     }
 
+    pub fn is_undef(&self) -> bool {
+        match self.data {
+            ConstData::Undef(_) => true,
+            _ => false
+        }
+    }
+
     pub fn is_zero(&self) -> bool {
         match self.data {
             ConstData::Bool(false) |
@@ -656,6 +677,14 @@ impl Constant {
         }
     }
 
+    pub fn is_all_ones(&self) -> bool {
+        match self.data {
+            ConstData::Bool(true) |
+            ConstData::Int(-1, _) => true,
+            ConstData::Uint(val, _) if val == !0 => true,
+            _ => false
+        }
+    }
 }
 
 impl Instruction {

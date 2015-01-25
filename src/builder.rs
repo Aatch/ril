@@ -4,10 +4,12 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::marker;
 use std::borrow::BorrowFrom;
+
 use context::Context;
 use imm_str::{ImmString,IntoImmString};
 use ir;
 use ty;
+use util::constant_fold;
 
 pub struct IRBuilder<B> {
     cx: Box<Context>,
@@ -152,7 +154,7 @@ pub struct BlockHandle<'a> {
 
 #[derive(Clone)]
 pub struct ValueHandle<'a> {
-    pub val: ir::Value,
+    val: ir::Value,
     lt: marker::ContravariantLifetime<'a>
 }
 
@@ -167,10 +169,20 @@ macro_rules! binops {
                     let mut l = l.val;
                     let mut r = r.val;
 
+                    let const_fold = constant_fold::$mname(&*self.cx, l.clone(), r.clone());
+                    if !const_fold.is_none() {
+                        return ValueHandle {
+                            val: const_fold,
+                            lt: marker::ContravariantLifetime
+                        }
+                    }
+
                     let lty = l.get_type();
                     let rty = r.get_type();
 
-                    assert!(lty == rty, "Operands are different types");
+                    assert!(lty == rty, "Operands to `{}` are different types ({:?} != {:?}) \
+                                         ({:?} == {:?})",
+                            stringify!($mname), lty, rty, l, r);
 
                     let l_use = l.add_use();
                     let r_use = r.add_use();
@@ -211,6 +223,14 @@ impl IRBuilder<Function> {
     where S: IntoImmString {
         let mut l = l.val;
         let mut r = r.val;
+
+        let const_fold = constant_fold::cmp(&*self.cx, cmp, l.clone(), r.clone());
+        if !const_fold.is_none() {
+            return ValueHandle {
+                val: const_fold,
+                lt: marker::ContravariantLifetime
+            }
+        }
 
         let lty = l.get_type();
         let rty = r.get_type();
