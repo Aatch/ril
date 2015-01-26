@@ -303,14 +303,6 @@ impl IRBuilder<Function> {
         self.add_instruction(blk, name, op, retty)
     }
 
-    pub fn alloca<'a, S>(&'a self, blk: BlockHandle<'a>, name: Option<S>,
-                        ty: ty::TyRef) -> ValueHandle<'a>
-    where S: IntoImmString {
-        let op = ir::Op::Alloca(ty);
-        let ity = ty::Ty::rptr(&*self.cx, true, ty);
-        self.add_instruction(blk, name, op, ity)
-    }
-
     pub fn store<'a>(&self, blk: BlockHandle<'a>,
                      dst: ValueHandle<'a>, val: ValueHandle<'a>) {
         let mut dst = dst.val;
@@ -341,17 +333,13 @@ impl IRBuilder<Function> {
         self.add_instruction(blk, name, op, ty)
     }
 
-    pub fn getfieldptr<'a, S>(&'a self, blk: BlockHandle<'a>, name: Option<S>, mutbl: bool,
+    pub fn getfieldptr<'a, S>(&'a self, blk: BlockHandle<'a>, name: Option<S>,
                               val: ValueHandle<'a>, fld: u32) -> ValueHandle<'a>
     where S: IntoImmString {
         let mut val = val.val;
         let val_ty = val.get_type();
 
-        assert!(val_ty.is_pointer(), "Value is not a pointer ({:?} != pointer type)",
-                val_ty);
-        let pointee = val_ty.pointee();
-
-        let ty = match &*pointee {
+        let ty = match &*val_ty {
             &ty::Ty::Struct(ref sty) => {
                 if sty.num_fields() > fld {
                     sty.get_field(fld)
@@ -369,13 +357,11 @@ impl IRBuilder<Function> {
             _ => panic!("Value is not a pointer to a valid type")
         };
 
-        let ty = ty::Ty::rptr(&*self.cx, mutbl, ty);
-
-        let op = ir::Op::GetFieldPtr(val.add_use(), fld);
+        let op = ir::Op::ExtractField(val.add_use(), fld);
         self.add_instruction(blk, name, op, ty)
     }
 
-    pub fn index<'a, S>(&'a self, blk: BlockHandle<'a>, name: Option<S>, mutbl: bool,
+    pub fn index<'a, S>(&'a self, blk: BlockHandle<'a>, name: Option<S>,
                         val: ValueHandle<'a>, idx: ValueHandle<'a>) -> ValueHandle<'a>
     where S: IntoImmString {
         let mut val = val.val;
@@ -386,18 +372,28 @@ impl IRBuilder<Function> {
 
         assert!(idx_ty.is_uint(), "Index is not a valid type ({:?} != unsigned integer)",
                 idx_ty);
-        assert!(val_ty.is_pointer(), "Value is not a pointer ({:?} != pointer type)",
-                val_ty);
-        let seq_ty = val_ty.pointee();
 
-        let el_ty = match &*seq_ty {
+        let ty = match &*val_ty {
             &ty::Ty::Array(ty, _) |
             &ty::Ty::Slice(ty) => ty,
-            ty => panic!("Value is not a pointer to a valid type ({:?})", ty)
+            ty => panic!("Value is not a valid type ({:?})", ty)
         };
 
-        let ty = ty::Ty::rptr(&*self.cx, mutbl, el_ty);
         let op = ir::Op::Index(val.add_use(), idx.add_use());
+
+        self.add_instruction(blk, name, op, ty)
+    }
+
+    pub fn phi<'a, S>(&'a self, blk: BlockHandle<'a>, name: Option<S>,
+                      ins: &mut [(ValueHandle<'a>, BlockHandle<'a>)]) -> ValueHandle<'a>
+    where S: IntoImmString {
+        assert!(ins.len() > 0);
+        let ty = ins[0].0.val.get_type();
+        let ins = ins.iter_mut().map(|&mut (ref mut val, ref blk)| {
+            (val.val.add_use(), blk.blk)
+        }).collect();
+
+        let op = ir::Op::Phi(ins);
 
         self.add_instruction(blk, name, op, ty)
     }

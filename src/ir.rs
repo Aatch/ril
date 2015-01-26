@@ -147,18 +147,14 @@ pub enum Op {
     /// Call(fn, args) - Call function `fn` with `args`
     Call(UseRef, Box<[UseRef]>),
 
-    /// Alloca(ty) - Allocate a new stack slot of given type `ty`.
-    Alloca(ty::TyRef),
     /// Store(dst, val) - Store `val` into the location at `dst`
     /// The type pointed to by `dst` must be the same as the type of `val`
     Store(UseRef, UseRef),
     /// Load(src) - Load the value at `src`. `src` must be a pointer type
     Load(UseRef),
-    /// GetFieldPtr(val, fld) - Get a pointer to field `fld` from the value pointed
-    /// to at `val`.
-    GetFieldPtr(UseRef, u32),
-    /// Index(val, idx) - Get a pointer to the `idx`-th element of the array pointed to
-    /// by `val`.
+    /// ExtractField(val, fld) - Get field `fld` from the `val`.
+    ExtractField(UseRef, u32),
+    /// Index(val, idx) - Get the `idx`-th element of `val`
     Index(UseRef, UseRef),
 
     /// Br(target) - Unconditional branch to `target`
@@ -168,6 +164,9 @@ pub enum Op {
     CondBr(UseRef, *mut BasicBlock, *mut BasicBlock),
     /// Return(val) - Return the value `val` from the function
     Return(UseRef),
+
+    /// PHI Node
+    Phi(Vec<(UseRef, *mut BasicBlock)>)
 }
 
 #[derive(Copy)]
@@ -900,7 +899,7 @@ impl<'a> Iterator for OperandIter<'a> {
             }
 
             Op::Load(ref u) |
-            Op::GetFieldPtr(ref u, _) |
+            Op::ExtractField(ref u, _) |
             Op::Not(ref u) |
             Op::CondBr(ref u, _, _) |
             Op::Return(ref u) => {
@@ -910,8 +909,15 @@ impl<'a> Iterator for OperandIter<'a> {
                     None
                 }
             }
-            Op::Alloca(_) |
             Op::Br(_) => None,
+
+            Op::Phi(ref ins) => {
+                if (idx as usize) < ins.len() {
+                    Some(&ins[idx as usize].0)
+                } else {
+                    None
+                }
+            }
         }
     }
 }
@@ -960,7 +966,7 @@ impl<'a> Iterator for OperandIterMut<'a> {
                 }
 
                 Op::Load(ref mut u) |
-                Op::GetFieldPtr(ref mut u, _) |
+                Op::ExtractField(ref mut u, _) |
                 Op::Not(ref mut u) |
                 Op::CondBr(ref mut u, _, _) |
                 Op::Return(ref mut u) => {
@@ -970,8 +976,15 @@ impl<'a> Iterator for OperandIterMut<'a> {
                         None
                     }
                 }
-                Op::Alloca(_) |
                 Op::Br(_) => None,
+
+                Op::Phi(ref mut ins) => {
+                    if (idx as usize) < ins.len() {
+                        Some(&mut ins[idx as usize].0)
+                    } else {
+                        None
+                    }
+                }
             })
         }
     }
@@ -1195,13 +1208,6 @@ impl fmt::Debug for Instruction {
                 f.write_str(")")
             },
 
-            Op::Alloca(ty) => {
-                let name = self.name.as_ref().map(|n| {
-                    n.as_slice()
-                }).unwrap_or("<unknown>");
-
-                write!(f, "%{} = alloca {:?}", name, ty)
-            },
             Op::Store(ref dst, ref val) => {
                 write!(f, "store {:?}, {:?}", dst, val)
             },
@@ -1212,12 +1218,12 @@ impl fmt::Debug for Instruction {
 
                 write!(f, "%{} = load {:?}", name, src)
             },
-            Op::GetFieldPtr(ref val, fld) => {
+            Op::ExtractField(ref val, fld) => {
                 let name = self.name.as_ref().map(|n| {
                     n.as_slice()
                 }).unwrap_or("<unknown>");
 
-                write!(f, "%{} = getfieldptr {:?}, {}",
+                write!(f, "%{} = extractfield {:?}, {}",
                        name, val, fld)
             },
             Op::Index(ref val, ref idx) => {
@@ -1242,6 +1248,24 @@ impl fmt::Debug for Instruction {
             Op::Return(ref u) => {
                 write!(f, "ret {:?}", u)
             },
+
+            Op::Phi(ref ins) => {
+                let name = self.name.as_ref().map(|n| {
+                    n.as_slice()
+                }).unwrap_or("<unknown>");
+
+                try!(write!(f, "%{} = phi ", name));
+                let mut iter = ins.iter();
+                if let Some(&(ref val, ref blk)) = iter.next() {
+                    let blk = unsafe { &**blk };
+                    try!(write!(f, "({:?}, {})", val, blk.name));
+                }
+                while let Some(&(ref val, ref blk)) = iter.next() {
+                    let blk = unsafe { &**blk };
+                    try!(write!(f, ", ({:?}, {})", val, blk.name));
+                }
+                Ok(())
+            }
         }
     }
 }

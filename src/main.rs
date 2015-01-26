@@ -48,19 +48,15 @@ fn main() {
 
         let one = f.const_u8(1);
 
-        let retval = f.alloca(entry, Some("retval"), cx.types.u8);
-
         f.condbr(entry, f.arg(1), then, els);
 
         let sub = f.sub(then, Some("sub"), f.arg(0), one.clone());
-        f.store(then, retval.clone(), sub);
         f.br(then, join);
 
         let add = f.add(els, Some("add"), f.arg(0), one);
-        f.store(els, retval.clone(), add);
         f.br(els, join);
 
-        let ret = f.load(join, Some("ret"), retval);
+        let ret = f.phi(join, Some("ret"), &mut [(sub, then), (add, els)]);
         f.ret(join, ret);
     }
 
